@@ -1,5 +1,6 @@
 import argparse
 import sys
+import time
 from typing import Tuple
 
 import cv2
@@ -71,7 +72,9 @@ def main() -> int:
         print(f"Unable to open camera {args.camera}.", file=sys.stderr)
         return 1
 
-    print("Press 'q' to quit.")
+    print("Press 'q' to quit or wait 8 seconds for automatic result.")
+    start_time = time.time()
+    matched = False
 
     while True:
         ret, frame = capture.read()
@@ -82,7 +85,6 @@ def main() -> int:
         face_embeddings, boxes = compute_embeddings(frame, mtcnn, resnet)
         status_text = "No face detected"
         status_color = (0, 255, 255)
-        matched = False
 
         if face_embeddings.shape[0] > 0 and boxes.shape[0] > 0:
             status_text = "Face detected"
@@ -100,12 +102,21 @@ def main() -> int:
             status_text = "ID Match confirmed" if matched else "Face does not match ID"
             status_color = (0, 255, 0) if matched else (0, 0, 255)
 
+        elapsed = time.time() - start_time
+        timer_text = f"Time: {elapsed:.1f}/8.0s"
+        cv2.putText(frame, timer_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
         draw_status(frame, status_text, status_color)
         cv2.imshow("Live Face Match", frame)
         cv2.imshow("ID Reference", id_display)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+        if elapsed >= 8.0:
+            break
+
+    result_text = "ID accepted" if matched else "ID rejected"
+    print(result_text)
 
     capture.release()
     cv2.destroyAllWindows()
