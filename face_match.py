@@ -76,7 +76,8 @@ def detect_motion(frame_buffer: deque) -> float:
     gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
     
     diff = cv2.absdiff(gray1, gray2)
-    motion_pixels = np.sum(diff > 30)
+    # Lower threshold = more sensitive to motion (phones are static)
+    motion_pixels = np.sum(diff > 20)  # Was 30 - stricter
     motion_score = min(1.0, motion_pixels / (frame1.shape[0] * frame1.shape[1]))
     
     return motion_score
@@ -102,6 +103,7 @@ def detect_color_distribution(frame: np.ndarray, face_box: np.ndarray) -> float:
 def check_liveness(frame: np.ndarray, face_box: np.ndarray, frame_buffer: deque, blink_history: deque) -> Tuple[bool, float, str]:
     """
     Comprehensive liveness detection combining multiple anti-spoofing techniques.
+    STRICT MODE: Heavily penalizes static faces and screens
     Returns: (is_live, confidence_score, reason)
     """
     eye_detected, eye_ratio = detect_eyes(frame, face_box)
@@ -116,29 +118,40 @@ def check_liveness(frame: np.ndarray, face_box: np.ndarray, frame_buffer: deque,
     blink_changes = sum(1 for i in range(1, len(blink_history)) if blink_history[i] != blink_history[i-1])
     blink_score = min(1.0, blink_changes / 3.0)
     
-    # Weighted combination of all scores
+    # STRICT WEIGHTS: Motion and blink are heavily weighted
+    # Phones are static and don't show real eye movement
     liveness_score = (
-        texture_score * 0.3 +
-        color_score * 0.25 +
-        motion_score * 0.25 +
-        blink_score * 0.2
+        texture_score * 0.15 +  # Reduced - screens can have some texture
+        color_score * 0.15 +    # Reduced - screens have good colors
+        motion_score * 0.40 +   # Increased - PHONES ARE STATIC
+        blink_score * 0.30      # Increased - REAL EYES MUST BLINK
     )
     
-    # Thresholds for detecting liveness
-    is_live = liveness_score > 0.4
+    # STRICT THRESHOLDS for phone screen blocking
+    # Main requirement: Need both motion and blinking OR high overall score
+    motion_or_blink = (motion_score > 0.15) or (blink_score > 0.15)
+    
+    # If static AND no blinking = definitely a phone screen
+    if motion_score < 0.10 and blink_score < 0.10:
+        is_live = False
+    else:
+        # For real people: require at least 0.48 score
+        is_live = liveness_score > 0.48
     
     # Generate reason
     reasons = []
-    if texture_score < 0.3:
-        reasons.append("Low texture quality")
-    if color_score < 0.3:
-        reasons.append("Unnatural color")
-    if motion_score < 0.1:
-        reasons.append("No natural motion")
-    if blink_score < 0.1:
-        reasons.append("No blink detected")
+    if texture_score < 0.25:
+        reasons.append("Low texture (screen/photo)")
+    if color_score < 0.25:
+        reasons.append("Limited colors (screen/photo)")
+    if motion_score < 0.15:
+        reasons.append("No motion (static)")
+    if blink_score < 0.15:
+        reasons.append("No blinking")
+    if liveness_score < 0.48:
+        reasons.append(f"Low confidence ({liveness_score:.2f})")
     
-    reason = " + ".join(reasons) if reasons else "Live face detected"
+    reason = " + ".join(reasons) if reasons else "Live face detected (motion + natural features)"
     
     return is_live, liveness_score, reason
 
@@ -173,12 +186,12 @@ def load_reference_embedding(image_path: str, mtcnn: MTCNN, resnet: InceptionRes
 
 def main() -> int:
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    default_id_image = os.path.join(script_dir, "Images", "1.jpg")
+    default_id_image = os.path.join(script_dir, "Images", "1.jpeg")
     parser = argparse.ArgumentParser(description="Match a live camera face to an ID image with liveness detection.")
     parser.add_argument("--id-image", default=default_id_image, help=f"Path to the scanned ID image (default: {default_id_image}).")
     parser.add_argument("--camera", type=int, default=0, help="Camera index to use (default: 0).")
     parser.add_argument("--tolerance", type=float, default=0.8, help="Face match tolerance (lower is stricter).")
-    parser.add_argument("--time-limit", type=int, default=15, help="Time limit in seconds (default: 15).")
+    parser.add_argument("--time-limit", type=int, default=30, help="Time limit in seconds (default: 15).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
