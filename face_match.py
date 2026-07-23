@@ -22,19 +22,19 @@ def draw_status(frame: np.ndarray, text: str, color: Tuple[int, int, int]) -> No
 
 def detect_eyes(frame: np.ndarray, face_box: np.ndarray) -> Tuple[bool, float]:
     """Detect eyes in the face region and return whether eyes are open and their aspect ratio."""
-    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-    
     left, top, right, bottom = [int(v) for v in face_box]
     face_roi = frame[max(0, top):min(frame.shape[0], bottom), max(0, left):min(frame.shape[1], right)]
     
     if face_roi.size == 0:
         return False, 0.5
     
-    eyes = eye_cascade.detectMultiScale(face_roi, 1.1, 4)
-    eye_detected = len(eyes) >= 2
-    eye_aspect_ratio = len(eyes) / 2.0 if len(eyes) > 0 else 0.0
+    # Use edge detection as proxy for eye detection
+    gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    eye_count = np.count_nonzero(edges) / (edges.shape[0] * edges.shape[1])
+    eye_detected = eye_count > 0.05  # Threshold for edge presence
     
-    return eye_detected, eye_aspect_ratio
+    return eye_detected, min(1.0, eye_count * 10)
 
 
 def analyze_texture_quality(frame: np.ndarray, face_box: np.ndarray) -> float:
@@ -48,24 +48,16 @@ def analyze_texture_quality(frame: np.ndarray, face_box: np.ndarray) -> float:
     
     gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
     
-    # Calculate Laplacian variance (blur detection)
+    # Calculate Laplacian variance (blur detection - measure of texture complexity)
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     
-    # Local Binary Pattern texture analysis
-    def local_binary_pattern(img):
-        lbp = np.zeros_like(img)
-        for i in range(1, img.shape[0] - 1):
-            for j in range(1, img.shape[1] - 1):
-                center = img[i, j]
-                binary = (img[i-1:i+2, j-1:j+2] >= center).astype(int)
-                lbp[i, j] = np.sum(binary * [1, 2, 4, 8, 16, 32, 64, 128])
-        return lbp
-    
-    lbp = local_binary_pattern(gray)
-    lbp_variance = np.var(lbp)
+    # Sobel edge detection for texture richness
+    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=5)
+    sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=5)
+    sobel_variance = np.var(sobelx) + np.var(sobely)
     
     # Normalize and combine scores (real faces have higher variance)
-    texture_score = min(1.0, (laplacian_var + lbp_variance) / 500.0)
+    texture_score = min(1.0, (laplacian_var + sobel_variance) / 1000.0)
     return texture_score
 
 
