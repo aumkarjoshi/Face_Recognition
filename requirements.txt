@@ -2,3 +2,5 @@
 facenet-pytorch
 numpy
 Pillow
+torch
+torchvision
