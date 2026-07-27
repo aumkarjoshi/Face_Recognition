@@ -62,7 +62,7 @@ def analyze_texture_quality(frame: np.ndarray, face_box: np.ndarray) -> float:
 
 
 def detect_motion(frame_buffer: deque) -> float:
-    """Detect motion between consecutive frames. Real faces have consistent motion."""
+    """Detect motion between consecutive frames. Real faces have some natural movement."""
     if len(frame_buffer) < 2:
         return 0.0
     
@@ -76,8 +76,8 @@ def detect_motion(frame_buffer: deque) -> float:
     gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
     
     diff = cv2.absdiff(gray1, gray2)
-    # Lower threshold = more sensitive to motion (phones are static)
-    motion_pixels = np.sum(diff > 20)  # Was 30 - stricter
+    # Increased threshold: 20 is too sensitive, 30+ allows natural stillness
+    motion_pixels = np.sum(diff > 30)
     motion_score = min(1.0, motion_pixels / (frame1.shape[0] * frame1.shape[1]))
     
     return motion_score
@@ -103,7 +103,7 @@ def detect_color_distribution(frame: np.ndarray, face_box: np.ndarray) -> float:
 def check_liveness(frame: np.ndarray, face_box: np.ndarray, frame_buffer: deque, blink_history: deque) -> Tuple[bool, float, str]:
     """
     Comprehensive liveness detection combining multiple anti-spoofing techniques.
-    STRICT MODE: Heavily penalizes static faces and screens
+    BALANCED MODE: Detects live faces reliably while blocking screen/photo attacks
     Returns: (is_live, confidence_score, reason)
     """
     eye_detected, eye_ratio = detect_eyes(frame, face_box)
@@ -116,42 +116,33 @@ def check_liveness(frame: np.ndarray, face_box: np.ndarray, frame_buffer: deque,
     
     # Calculate blink detection score
     blink_changes = sum(1 for i in range(1, len(blink_history)) if blink_history[i] != blink_history[i-1])
-    blink_score = min(1.0, blink_changes / 3.0)
+    blink_score = min(1.0, blink_changes / 5.0)  # Relaxed: more lenient blink detection
     
-    # STRICT WEIGHTS: Motion and blink are heavily weighted
-    # Phones are static and don't show real eye movement
+    # BALANCED WEIGHTS: All factors contribute, but not overly strict
+    # Texture and color help detect screens, motion and blink help detect life
     liveness_score = (
-        texture_score * 0.15 +  # Reduced - screens can have some texture
-        color_score * 0.15 +    # Reduced - screens have good colors
-        motion_score * 0.40 +   # Increased - PHONES ARE STATIC
-        blink_score * 0.30      # Increased - REAL EYES MUST BLINK
+        texture_score * 0.25 +  # Increased - real faces have more texture
+        color_score * 0.25 +    # Increased - real faces have better color variation
+        motion_score * 0.30 +   # Moderate - phones are static but people can be still
+        blink_score * 0.20      # Moderate - blinking is natural but not required
     )
     
-    # STRICT THRESHOLDS for phone screen blocking
-    # Main requirement: Need both motion and blinking OR high overall score
-    motion_or_blink = (motion_score > 0.15) or (blink_score > 0.15)
+    # More lenient thresholds that still block screens
+    # Key insight: Real people + camera = inherent texture quality + color variation
+    # Phones are flat, consistent, and lack depth
     
-    # If static AND no blinking = definitely a phone screen
-    if motion_score < 0.10 and blink_score < 0.10:
+    # Screen auto-detection: Perfect stillness + very low texture + low color variance
+    if motion_score < 0.05 and texture_score < 0.15 and color_score < 0.15:
         is_live = False
+        reason = "Screen/photo detected (no texture or color variation)"
     else:
-        # For real people: require at least 0.48 score
-        is_live = liveness_score > 0.48
-    
-    # Generate reason
-    reasons = []
-    if texture_score < 0.25:
-        reasons.append("Low texture (screen/photo)")
-    if color_score < 0.25:
-        reasons.append("Limited colors (screen/photo)")
-    if motion_score < 0.15:
-        reasons.append("No motion (static)")
-    if blink_score < 0.15:
-        reasons.append("No blinking")
-    if liveness_score < 0.48:
-        reasons.append(f"Low confidence ({liveness_score:.2f})")
-    
-    reason = " + ".join(reasons) if reasons else "Live face detected (motion + natural features)"
+        # For real people: require at least 0.35 score (much more lenient)
+        is_live = liveness_score > 0.35
+        
+        if is_live:
+            reason = "Live face detected"
+        else:
+            reason = f"Low liveness confidence ({liveness_score:.2f})"
     
     return is_live, liveness_score, reason
 
@@ -191,7 +182,7 @@ def main() -> int:
     parser.add_argument("--id-image", default=default_id_image, help=f"Path to the scanned ID image (default: {default_id_image}).")
     parser.add_argument("--camera", type=int, default=0, help="Camera index to use (default: 0).")
     parser.add_argument("--tolerance", type=float, default=0.8, help="Face match tolerance (lower is stricter).")
-    parser.add_argument("--time-limit", type=int, default=8, help="Time limit in seconds (default: 15).")
+    parser.add_argument("--time-limit", type=int, default=30, help="Time limit in seconds (default: 15).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
